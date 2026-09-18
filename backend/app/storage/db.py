@@ -176,8 +176,28 @@ def get_verification_runs(project_id: str) -> List[Dict[str, Any]]:
                 d["results_json"] = json.loads(d["results_json"])
             except Exception:
                 pass
-        result.append(d)
-    return result
+def delete_project(project_id: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM agent_events WHERE project_id = ?", (project_id,))
+    cursor.execute("DELETE FROM migration_plans WHERE project_id = ?", (project_id,))
+    cursor.execute("DELETE FROM verification_runs WHERE project_id = ?", (project_id,))
+    cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+def reset_all_projects() -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM agent_events")
+    cursor.execute("DELETE FROM migration_plans")
+    cursor.execute("DELETE FROM verification_runs")
+    cursor.execute("DELETE FROM projects")
+    conn.commit()
+    conn.close()
+    return True
 
 # Auto-initialize DB on import
 init_db()
+

@@ -15,9 +15,10 @@ yarn-debug.log*
 yarn-error.log*
 
 # ReForge runtime data
-backend/data/projects/*
-backend/data/targets/*
+backend/data/projects/
+backend/data/targets/
 backend/data/reforge.db
+backend/data/*.zip
 !backend/data/projects/.gitkeep
 !backend/data/targets/.gitkeep
 
@@ -28,9 +29,3 @@ Thumbs.db
 .vscode/
 *.suo
 *.user
-
-.venv/
-node_modules/
-dist/
-__pycache__/
-.pytest_cache/

@@ -4,9 +4,10 @@ import shutil
 import zipfile
 import uuid
 from typing import List, Dict, Any, Optional
-from app.config import PROJECTS_DIR, BASE_DIR, MIGRATION_TARGETS, SUPPORTED_LANGUAGES
+from app.config import PROJECTS_DIR, TARGETS_DIR, BASE_DIR, MIGRATION_TARGETS, SUPPORTED_LANGUAGES
 from app.storage.db import (
-    save_project, list_projects, get_project, get_agent_events, record_agent_event
+    save_project, list_projects, get_project, get_agent_events, record_agent_event,
+    delete_project, reset_all_projects
 )
 from app.mcp.tools.analysis import build_dependency_graph, analyze_repository
 from app.parser.universal_parser import detect_language_and_framework
@@ -160,6 +161,17 @@ async def upload_project_zip(
         shutil.rmtree(project_dest, ignore_errors=True)
         raise HTTPException(status_code=400, detail=f"Failed to unzip archive: {str(e)}")
 
+    # If the zip extracted to a single root subfolder, unnest it
+    subdirs = [p for p in project_dest.iterdir() if p.is_dir() and p.name not in ["__MACOSX"]]
+    files = [p for p in project_dest.iterdir() if p.is_file()]
+    if len(subdirs) == 1 and len(files) == 0:
+        single_dir = subdirs[0]
+        temp_dir = project_dest.parent / f"{project_dest.name}_temp"
+        single_dir.rename(temp_dir)
+        for item in temp_dir.iterdir():
+            shutil.move(str(item), str(project_dest))
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
     # Auto-detect language and framework!
     lang, fw = detect_language_and_framework(project_dest)
     detected_source = f"{lang.title()} / {fw.title()}"
@@ -193,4 +205,45 @@ async def upload_project_zip(
         "target_framework": target_framework,
         "message": f"Archive uploaded. Auto-detected {detected_source}."
     }
+
+@router.delete("/{project_id}")
+def delete_single_project(project_id: str):
+    """Deletes a project, its events, plans, verification runs, and all generated files."""
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Clean up project source directory
+    src = Path(proj["source_path"])
+    if src.exists():
+        shutil.rmtree(src, ignore_errors=True)
+
+    # Clean up target directory
+    tgt = TARGETS_DIR / project_id
+    if tgt.exists():
+        shutil.rmtree(tgt, ignore_errors=True)
+
+    # Delete from database
+    delete_project(project_id)
+
+    return {"success": True, "message": f"Project '{proj['name']}' ({project_id}) deleted successfully."}
+
+@router.post("/reset")
+def reset_workspace():
+    """Resets the entire workspace, clearing all projects and targets."""
+    # Delete all project folders
+    for d in PROJECTS_DIR.iterdir():
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+
+    # Delete all target folders and zips
+    for d in TARGETS_DIR.iterdir():
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+        elif d.is_file() and d.suffix == ".zip":
+            d.unlink(missing_ok=True)
+
+    reset_all_projects()
+    return {"success": True, "message": "All projects and generated data have been completely reset."}
+
 

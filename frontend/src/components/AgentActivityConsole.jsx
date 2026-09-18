@@ -57,7 +57,7 @@ export default function AgentActivityConsole({ events, isMigrating }) {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-80px)] bg-[#0b0f19] p-4 text-slate-200">
+    <div className="flex flex-col h-[calc(100vh-220px)] bg-white dark:bg-[#0b0f19] p-4 text-slate-800 dark:text-slate-200 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
       {/* Top Controls Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
         <div className="flex items-center space-x-2">

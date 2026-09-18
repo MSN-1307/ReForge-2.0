@@ -51,6 +51,16 @@ export const api = {
     return res.json();
   },
 
+  deleteProject: async (projectId) => {
+    const res = await fetch(`${API_BASE}/projects/${projectId}`, { method: 'DELETE' });
+    return res.json();
+  },
+
+  resetWorkspace: async () => {
+    const res = await fetch(`${API_BASE}/projects/reset`, { method: 'POST' });
+    return res.json();
+  },
+
   getProjectEvents: async (projectId) => {
     const res = await fetch(`${API_BASE}/projects/${projectId}/events`);
     return res.json();

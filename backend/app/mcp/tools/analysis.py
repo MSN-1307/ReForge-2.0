@@ -12,6 +12,19 @@ from app.config import PROJECTS_DIR
 # In-memory storage for graphs
 project_graphs: Dict[str, CodebaseKnowledgeGraph] = {}
 
+IGNORED_DIRS = {
+    "node_modules", ".git", "dist", "build", ".venv", "venv", "env",
+    "__pycache__", ".idea", ".vscode", "site-packages", ".pytest_cache",
+    ".mypy_cache", "target", ".next", ".nuxt", "bin", "obj", "__MACOSX"
+}
+
+IGNORED_EXTENSIONS = {
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".pt", ".onnx", ".h5",
+    ".pkl", ".wav", ".mp3", ".ogg", ".flac", ".png", ".jpg", ".jpeg",
+    ".gif", ".webp", ".ico", ".svg", ".zip", ".tar", ".gz", ".7z",
+    ".pdf", ".docx", ".xlsx", ".mp4", ".mov", ".avi", ".mkv", ".pyc"
+}
+
 @mcp_registry.register(
     name="analyze_repository",
     category="Repository / Analysis",
@@ -29,17 +42,25 @@ def analyze_repository(project_id: str) -> Dict[str, Any]:
     files_list = []
     total_lines = 0
     package_json = {}
+    detected_frameworks = []
 
     for root, dirs, files in os.walk(source_path):
-        # Ignore node_modules, .git, etc.
-        dirs[:] = [d for d in dirs if d not in ["node_modules", ".git", "dist", "build"]]
+        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
         for f in files:
             full_path = Path(root) / f
+            suffix = full_path.suffix.lower()
+            if suffix in IGNORED_EXTENSIONS:
+                continue
+
             rel_path = full_path.relative_to(source_path)
-            try:
-                line_count = len(full_path.read_text(encoding="utf-8", errors="replace").splitlines())
-            except Exception:
-                line_count = 0
+            line_count = 0
+            # Only count lines for code & config files under 2MB
+            if full_path.stat().st_size < 2 * 1024 * 1024:
+                try:
+                    line_count = len(full_path.read_text(encoding="utf-8", errors="replace").splitlines())
+                except Exception:
+                    line_count = 0
+
             total_lines += line_count
             files_list.append({
                 "rel_path": str(rel_path).replace("\\", "/"),
@@ -52,8 +73,18 @@ def analyze_repository(project_id: str) -> Dict[str, Any]:
                     package_json = json.loads(full_path.read_text(encoding="utf-8"))
                 except Exception:
                     pass
+            elif f == "requirements.txt":
+                try:
+                    req_text = full_path.read_text(encoding="utf-8", errors="replace")
+                    if "fastapi" in req_text.lower():
+                        detected_frameworks.append("FastAPI")
+                    if "flask" in req_text.lower():
+                        detected_frameworks.append("Flask")
+                    if "django" in req_text.lower():
+                        detected_frameworks.append("Django")
+                except Exception:
+                    pass
 
-    detected_frameworks = []
     deps = package_json.get("dependencies", {})
     if "express" in deps:
         detected_frameworks.append("Express.js")
@@ -61,15 +92,18 @@ def analyze_repository(project_id: str) -> Dict[str, Any]:
         detected_frameworks.append("Mongoose (MongoDB)")
     if "sequelize" in deps:
         detected_frameworks.append("Sequelize ORM")
-    if "jest" in deps or "supertest" in deps or "jest" in package_json.get("devDependencies", {}):
+    if "jest" in deps or "supertest" in deps:
         detected_frameworks.append("Jest / Supertest")
+
+    if not detected_frameworks:
+        detected_frameworks.append(project.get("source_framework", "Universal API"))
 
     analysis_result = {
         "project_id": project_id,
         "name": project["name"],
         "total_files": len(files_list),
         "total_lines": total_lines,
-        "frameworks": detected_frameworks or ["Node.js"],
+        "frameworks": detected_frameworks,
         "dependencies": deps,
         "files": files_list
     }
@@ -79,7 +113,7 @@ def analyze_repository(project_id: str) -> Dict[str, Any]:
         category="EVIDENCE",
         agent_name="ArchaeologistAgent",
         title="Observed Repository Structure",
-        details=f"Identified {len(files_list)} source files ({total_lines} total lines of code) with frameworks: {', '.join(detected_frameworks or ['Node.js'])}",
+        details=f"Identified {len(files_list)} source files ({total_lines} total lines of code) with frameworks: {', '.join(detected_frameworks)}",
         metadata={"files_count": len(files_list), "frameworks": detected_frameworks}
     )
 
@@ -99,17 +133,50 @@ def parse_code(project_id: str, file_path: str = "") -> Dict[str, Any]:
     source_path = Path(project["source_path"])
     ast_catalog = {}
 
+    from app.parser.universal_parser import universal_parser
+    # Universal project parse
+    try:
+        u_proj = universal_parser.parse_project(source_path, project["name"])
+        # If universal parser found routes or models, include them in catalog
+        for route in u_proj.routes:
+            rf = route.file or "routes.py"
+            if rf not in ast_catalog:
+                ast_catalog[rf] = {"file": rf, "routes": [], "models": [], "imports": [], "middleware": []}
+            ast_catalog[rf]["routes"].append({
+                "method": route.method,
+                "path": route.path,
+                "params": route.path_params,
+                "body_fields": route.body_fields,
+                "status_code": route.status_code,
+                "line": route.line
+            })
+
+        for model in u_proj.models:
+            mf = model.file or "models.py"
+            if mf not in ast_catalog:
+                ast_catalog[mf] = {"file": mf, "routes": [], "models": [], "imports": [], "middleware": []}
+            ast_catalog[mf]["models"].append({
+                "name": model.name,
+                "fields": [{"name": f.name, "type": f.type, "required": f.required} for f in model.fields],
+                "line": model.line
+            })
+    except Exception as e:
+        print(f"Universal parser error: {e}")
+
+    # Also parse JS/TS files if present
     if file_path:
         target = source_path / file_path
-        ast_catalog[file_path] = ast_parser.parse_file(target)
+        if target.exists() and target.suffix in [".js", ".ts", ".mjs"]:
+            ast_catalog[file_path] = ast_parser.parse_file(target)
     else:
         for root, dirs, files in os.walk(source_path):
-            dirs[:] = [d for d in dirs if d not in ["node_modules", ".git", "dist", "build"]]
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
             for f in files:
                 if f.endswith((".js", ".ts", ".mjs")):
                     full = Path(root) / f
                     rel = str(full.relative_to(source_path)).replace("\\", "/")
-                    ast_catalog[rel] = ast_parser.parse_file(full)
+                    if rel not in ast_catalog:
+                        ast_catalog[rel] = ast_parser.parse_file(full)
 
     # Summarize extracted facts
     routes_found = sum(len(f.get("routes", [])) for f in ast_catalog.values())
@@ -129,6 +196,7 @@ def parse_code(project_id: str, file_path: str = "") -> Dict[str, Any]:
         "files_parsed": len(ast_catalog),
         "catalog": ast_catalog
     }
+
 
 
 @mcp_registry.register(
