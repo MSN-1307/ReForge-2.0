@@ -9,3 +9,6 @@ dist/
 *.env
 __pycache__/
 
+
+backend/data/projects/*
+!backend/data/projects/.gitkeep
